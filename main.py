@@ -124,17 +124,17 @@ def generate_heatmap():
         print("❌ Error in generate_heatmap:", e)
 
 # -------------------- Background Task --------------------
-@app.on_event("startup")
-async def background_refresh():
-    async def loop():
-        while True:
-            print("🔁 Refreshing heatmap in background...")
-            generate_heatmap()
-            await asyncio.sleep(3600)
-    try:
-        asyncio.create_task(loop())
-    except Exception as e:
-        print("❌ Failed to start background task:", e)
+#@app.on_event("startup")
+#async def background_refresh():
+ #   async def loop():
+  #      while True:
+   #         print("🔁 Refreshing heatmap in background...")
+    #        generate_heatmap()
+     #       await asyncio.sleep(3600)
+    #try:
+     #   asyncio.create_task(loop())
+    #except Exception as e:
+     #   print("❌ Failed to start background task:", e)
 
 # -------------------- API Routes --------------------
 @app.get("/")
