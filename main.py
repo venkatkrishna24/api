@@ -116,17 +116,19 @@ def generate_heatmap():
 @app.on_event("startup")
 async def safe_background_refresh():
     async def loop():
+        await asyncio.sleep(10)  # 👈 delay to ensure server starts first
         while True:
             try:
                 print("🔁 Background: Generating heatmap...")
                 generate_heatmap()
+                print("✅ Heatmap refreshed.")
             except Exception as e:
                 print(f"❌ Heatmap generation failed in background: {e}")
-            await asyncio.sleep(3600)  # every hour
+            await asyncio.sleep(3600)  # run every hour
 
     try:
+        print("🟢 Starting background refresh loop...")
         asyncio.create_task(loop())
-        print("✅ Background refresh loop started.")
     except Exception as e:
         print(f"❌ Failed to create background task: {e}")
 
