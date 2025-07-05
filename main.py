@@ -189,5 +189,9 @@ def get_aqi_info(city: str = Query(...)):
 # -------------------- Entry Point --------------------
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting production server...")
-    uvicorn.run("main:app", host="0.0.0.0", port=10000)
+    print("🚀 Launching Uvicorn on port 10000")
+    try:
+        uvicorn.run("main:app", host="0.0.0.0", port=10000)
+    except Exception as e:
+        print("❌ Failed to start Uvicorn:", e)
+
