@@ -6,7 +6,6 @@ import json
 import folium
 import time
 from datetime import datetime
-from geopy.geocoders import Nominatim
 import pandas as pd
 import os
 import asyncio
@@ -14,12 +13,14 @@ import google.generativeai as genai
 
 # -------------------- Config --------------------
 print("📦 Starting FastAPI AQI backend...")
-API_KEY = os.getenv("OWM_API_KEY", "fallback-openweather-key")
+API_KEY = os.getenv("OWM_API_KEY", "fallback-key")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
 genai.configure(api_key=GEMINI_KEY)
 gemini_model = genai.GenerativeModel(model_name="gemini-1.5-flash")
 
 HEATMAP_FILE = "aqi_heatmap.html"
+COORDS_FILE = "district_coords.json"
+last_refresh_time = None
 
 # -------------------- App Init --------------------
 app = FastAPI()
@@ -30,24 +31,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------- Helper Functions --------------------
-def get_coordinates(place):
-    try:
-        geolocator = Nominatim(user_agent="aqi_app")
-        location = geolocator.geocode(place + ", India", timeout=10)
-        if location:
-            return location.latitude, location.longitude
-    except Exception as e:
-        print("❌ Geolocation error:", e)
-    return None
-
+# -------------------- Helpers --------------------
 def get_aqi(lat, lon):
     url = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={API_KEY}"
     try:
         res = requests.get(url)
         res.raise_for_status()
-        data = res.json()
-        return data["list"][0]["main"]["aqi"]
+        return res.json()["list"][0]["main"]["aqi"]
     except Exception as e:
         print("❌ AQI fetch error:", e)
         return None
@@ -58,10 +48,7 @@ def get_color(aqi):
     }.get(aqi, "gray")
 
 def generate_health_advice(city: str, aqi_val: int):
-    prompt = (
-        f"The AQI in {city} is {aqi_val}. "
-        f"Give a short health tip with risk level and precautions in one sentence."
-    )
+    prompt = f"The AQI in {city} is {aqi_val}. Give a short health tip with risk level and precautions."
     try:
         res = gemini_model.generate_content(prompt)
         return res.text.strip()
@@ -70,30 +57,28 @@ def generate_health_advice(city: str, aqi_val: int):
         return "AQI data available. Consider staying indoors if sensitive."
 
 def generate_heatmap():
+    global last_refresh_time
     try:
-        with open("States and Districts.json", "r", encoding="utf-8") as f:
-            states_data = json.load(f)
-        districts = [d["name"] for s in states_data for d in s["districts"]]
-        map_center = get_coordinates("India")
-        m = folium.Map(location=map_center, zoom_start=5, tiles="CartoDB positron")
+        with open(COORDS_FILE, "r", encoding="utf-8") as f:
+            coords_data = json.load(f)
 
-        for district in districts:
-            coords = get_coordinates(district)
-            if coords:
-                lat, lon = coords
-                aqi = get_aqi(lat, lon)
-                if aqi:
-                    color = get_color(aqi)
-                    folium.CircleMarker(
-                        location=[lat, lon],
-                        radius=6,
-                        popup=f"{district} — AQI: {aqi}",
-                        color=color,
-                        fill=True,
-                        fill_color=color,
-                        fill_opacity=0.7
-                    ).add_to(m)
-                time.sleep(1)  # API rate limit friendly
+        m = folium.Map(location=[22.9734, 78.6569], zoom_start=5, tiles="CartoDB positron")
+
+        for district, coord in coords_data.items():
+            lat, lon = coord
+            aqi = get_aqi(lat, lon)
+            if aqi:
+                color = get_color(aqi)
+                folium.CircleMarker(
+                    location=[lat, lon],
+                    radius=6,
+                    popup=f"{district} — AQI: {aqi}",
+                    color=color,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=0.7
+                ).add_to(m)
+            time.sleep(0.2)  # Light API delay
 
         legend = """
         <div style="position: fixed; bottom: 30px; left: 30px; width: 150px;
@@ -108,53 +93,68 @@ def generate_heatmap():
         """
         m.get_root().html.add_child(folium.Element(legend))
         m.save(HEATMAP_FILE)
-        print("✅ Heatmap generated")
+        last_refresh_time = datetime.utcnow().isoformat()
+        print("✅ Heatmap generated at", last_refresh_time)
     except Exception as e:
         print("❌ Heatmap generation failed:", e)
 
-# -------------------- Background Heatmap Refresh --------------------
+# -------------------- Background Task --------------------
 @app.on_event("startup")
 async def safe_background_refresh():
     async def loop():
-        await asyncio.sleep(10)  # 👈 delay to ensure server starts first
+        await asyncio.sleep(10)
         while True:
             try:
                 print("🔁 Background: Generating heatmap...")
                 generate_heatmap()
-                print("✅ Heatmap refreshed.")
+                print("✅ Heatmap refresh done.")
             except Exception as e:
-                print(f"❌ Heatmap generation failed in background: {e}")
-            await asyncio.sleep(3600)  # run every hour
+                print("❌ Background error:", e)
+            await asyncio.sleep(3600)
 
     try:
         print("🟢 Starting background refresh loop...")
         asyncio.create_task(loop())
     except Exception as e:
-        print(f"❌ Failed to create background task: {e}")
+        print("❌ Failed to start background task:", e)
 
 # -------------------- Routes --------------------
 @app.get("/")
 def root():
     print("✅ '/' route hit")
-    return {"message": "AQI backend is live"}
+    return {
+        "message": "✅ AQI API running",
+        "docs": "/docs",
+        "heatmap": "/heatmap",
+        "aqi_example": "/aqi?city=Delhi"
+    }
+
+@app.get("/status")
+def get_status():
+    return {
+        "message": "AQI backend is live",
+        "last_heatmap_refresh": last_refresh_time
+    }
 
 @app.get("/heatmap")
 def serve_heatmap():
     if not os.path.exists(HEATMAP_FILE):
+        print("📁 No heatmap found, generating once...")
         generate_heatmap()
     return FileResponse(HEATMAP_FILE, media_type="text/html")
 
 @app.get("/aqi")
 def get_aqi_json(city: str = Query(...)):
-    coords = get_coordinates(city)
-    if not coords:
-        return JSONResponse(status_code=404, content={"error": "Location not found"})
-    lat, lon = coords
-
-    forecast_url = f"https://api.openweathermap.org/data/2.5/air_pollution/forecast?lat={lat}&lon={lon}&appid={API_KEY}"
-    current_url = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={API_KEY}"
-
     try:
+        url = f"https://nominatim.openstreetmap.org/search?q={city},India&format=json"
+        res = requests.get(url).json()
+        if not res:
+            return JSONResponse(status_code=404, content={"error": "City not found"})
+        lat, lon = float(res[0]["lat"]), float(res[0]["lon"])
+
+        forecast_url = f"https://api.openweathermap.org/data/2.5/air_pollution/forecast?lat={lat}&lon={lon}&appid={API_KEY}"
+        current_url = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={API_KEY}"
+
         forecast_data = requests.get(forecast_url).json().get("list", [])
         current_data = requests.get(current_url).json().get("list", [])
 
