@@ -6,7 +6,6 @@ import json
 import folium
 import time
 from datetime import datetime
-from geopy.geocoders import Nominatim
 import pandas as pd
 import os
 import asyncio
@@ -18,7 +17,7 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
 genai.configure(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 HEATMAP_FILE = "aqi_heatmap.html"
-DISTRICTS_FILE = "States and Districts.json"
+DISTRICTS_FILE = "States_and_Districts.json"
 
 app = FastAPI()
 
@@ -31,16 +30,6 @@ app.add_middleware(
 )
 
 # -------------------- Utility Functions --------------------
-def get_coordinates(place):
-    try:
-        geolocator = Nominatim(user_agent="aqi_app")
-        location = geolocator.geocode(place + ", India", timeout=10)
-        if location:
-            return location.latitude, location.longitude
-    except Exception as e:
-        print("❌ Geolocation error:", e)
-    return None
-
 def get_aqi(lat, lon):
     url = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={API_KEY}"
     try:
@@ -79,29 +68,26 @@ def generate_heatmap():
             return
 
         with open(DISTRICTS_FILE, "r", encoding="utf-8") as f:
-            states_data = json.load(f)
+            city_coords = json.load(f)
 
-        districts = [d["name"] for s in states_data for d in s["districts"]]
-        map_center = get_coordinates("India")
+        map_center = [20.5937, 78.9629]  # Center of India
         m = folium.Map(location=map_center, zoom_start=5, tiles="CartoDB positron")
 
-        for district in districts:
-            coords = get_coordinates(district)
-            if coords:
-                lat, lon = coords
-                aqi = get_aqi(lat, lon)
-                if aqi:
-                    color = get_color(aqi)
-                    folium.CircleMarker(
-                        location=[lat, lon],
-                        radius=6,
-                        popup=f"{district} — AQI: {aqi}",
-                        color=color,
-                        fill=True,
-                        fill_color=color,
-                        fill_opacity=0.7
-                    ).add_to(m)
-                time.sleep(1)
+        for city, coords in city_coords.items():
+            lat, lon = coords
+            aqi = get_aqi(lat, lon)
+            if aqi:
+                color = get_color(aqi)
+                folium.CircleMarker(
+                    location=[lat, lon],
+                    radius=6,
+                    popup=f"{city} — AQI: {aqi}",
+                    color=color,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=0.7
+                ).add_to(m)
+            time.sleep(1)  # avoid rate-limiting
 
         legend = """
         <div style="position: fixed; bottom: 30px; left: 30px; width: 150px;
@@ -121,7 +107,7 @@ def generate_heatmap():
     except Exception as e:
         print("❌ Error in generate_heatmap():", e)
 
-# -------------------- Background Heatmap Refresh --------------------
+# -------------------- Background Task --------------------
 @app.on_event("startup")
 async def refresh_heatmap_every_hour():
     async def loop():
@@ -144,15 +130,18 @@ def serve_heatmap():
 
 @app.get("/aqi")
 def get_aqi_data(city: str = Query(...)):
-    coords = get_coordinates(city)
-    if not coords:
-        return JSONResponse(status_code=404, content={"error": "Location not found"})
-    lat, lon = coords
-
-    current_url = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={API_KEY}"
-    forecast_url = f"https://api.openweathermap.org/data/2.5/air_pollution/forecast?lat={lat}&lon={lon}&appid={API_KEY}"
-
     try:
+        with open(DISTRICTS_FILE, "r", encoding="utf-8") as f:
+            city_coords = json.load(f)
+
+        if city not in city_coords:
+            return JSONResponse(status_code=404, content={"error": "City not found"})
+
+        lat, lon = city_coords[city]
+
+        current_url = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={API_KEY}"
+        forecast_url = f"https://api.openweathermap.org/data/2.5/air_pollution/forecast?lat={lat}&lon={lon}&appid={API_KEY}"
+
         current_data = requests.get(current_url).json().get("list", [])
         forecast_data = requests.get(forecast_url).json().get("list", [])
 
@@ -181,7 +170,7 @@ def get_aqi_data(city: str = Query(...)):
         print("❌ AQI fetch failed:", e)
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-# -------------------- Start App --------------------
+# -------------------- Entry Point --------------------
 if __name__ == "__main__":
     import uvicorn
     print("🚀 Launching server...")
