@@ -1,7 +1,8 @@
 fastapi
-uvicorn
+uvicorn[standard]
 requests
-folium
-geopy
 pandas
+folium
 google-generativeai
+python-multipart
+aiofiles
