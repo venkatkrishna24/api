@@ -187,6 +187,23 @@ def get_aqi_data(city: str = Query(...)):
     except Exception as e:
         print("❌ AQI fetch failed:", e)
         return JSONResponse(status_code=500, content={"error": str(e)})
+@app.get("/aqi_by_coords")
+def get_aqi_by_coords(lat: float = Query(...), lon: float = Query(...)):
+    try:
+        url = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={API_KEY}"
+        res = requests.get(url)
+        res.raise_for_status()
+        data = res.json()
+        aqi = data["list"][0]["main"]["aqi"]
+        return {
+            "lat": lat,
+            "lon": lon,
+            "aqi": aqi
+        }
+    except Exception as e:
+        print("❌ AQI fetch from coords failed:", e)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 # -------------------- Entry Point --------------------
 if __name__ == "__main__":
