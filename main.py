@@ -5,7 +5,7 @@ import requests
 import json
 import folium
 import time
-from datetime import datetime
+from datetime import datetime, date
 import pandas as pd
 import os
 import asyncio
@@ -18,6 +18,7 @@ genai.configure(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 HEATMAP_FILE = "aqi_heatmap.html"
 DISTRICTS_FILE = "States_and_Districts.json"
+HISTORICAL_CSV = "aqi_history.csv"
 
 app = FastAPI()
 
@@ -61,6 +62,11 @@ def generate_health_advice(city: str, aqi_val: int):
         print("❌ Gemini error:", e)
         return "AQI available. Consider staying indoors if sensitive."
 
+def log_daily_aqi(city, aqi):
+    today = date.today().isoformat()
+    with open(HISTORICAL_CSV, mode="a", encoding="utf-8") as f:
+        f.write(f"{city},{today},{aqi}\n")
+
 def generate_heatmap():
     try:
         if not os.path.exists(DISTRICTS_FILE):
@@ -87,7 +93,8 @@ def generate_heatmap():
                     fill_color=color,
                     fill_opacity=0.7
                 ).add_to(m)
-            time.sleep(1)  # avoid rate-limiting
+                log_daily_aqi(city, aqi)
+            time.sleep(1)
 
         legend = """
         <div style="position: fixed; bottom: 30px; left: 30px; width: 150px;
@@ -155,14 +162,25 @@ def get_aqi_data(city: str = Query(...)):
             "aqi": i["main"]["aqi"]
         } for i in forecast_data])
 
-        combined = pd.concat([df_current, df_forecast])
-        latest = combined.iloc[-1]["aqi"] if not combined.empty else None
+        df_forecast["date"] = pd.to_datetime(df_forecast["datetime"]).dt.date
+        df_7day = df_forecast.groupby("date")["aqi"].mean().reset_index().head(7)
+
+        # Load historical AQI
+        if os.path.exists(HISTORICAL_CSV):
+            df_hist = pd.read_csv(HISTORICAL_CSV, names=["city", "date", "aqi"])
+            city_history = df_hist[df_hist["city"] == city].tail(30)
+        else:
+            city_history = pd.DataFrame(columns=["city", "date", "aqi"])
+
+        latest = df_current.iloc[-1]["aqi"] if not df_current.empty else None
         advice = generate_health_advice(city, latest) if latest else "No AQI available."
 
         return {
             "city": city,
             "current_trend": df_current.to_dict(orient="records"),
             "forecast": df_forecast.to_dict(orient="records"),
+            "forecast_7days": df_7day.to_dict(orient="records"),
+            "history": city_history.to_dict(orient="records"),
             "gemini_advice": advice
         }
 
