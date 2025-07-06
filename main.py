@@ -15,11 +15,11 @@ from io import BytesIO
 import google.generativeai as genai
 
 # -------------------- CONFIG --------------------
-API_KEY = os.getenv("OWM_API_KEY", "71b5019314b0f31dbdb2dab77af530ad")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDsleB6zDYnNyLGRMzzwOt3lRkHzCODjgk")
+API_KEY = os.getenv("OWM_API_KEY", "your_openweather_api_key")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY", "your_gemini_api_key")
+
 genai.configure(api_key=GEMINI_KEY)
 gemini_model = genai.GenerativeModel(model_name="gemini-1.5-flash")
-
 HEATMAP_FILE = "aqi_heatmap.html"
 
 # -------------------- APP SETUP --------------------
@@ -31,7 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------- UTILITY FUNCTIONS --------------------
+# -------------------- UTILITY --------------------
 def get_coordinates(place):
     try:
         geolocator = Nominatim(user_agent="aqi_app")
@@ -105,26 +105,24 @@ def generate_heatmap():
     except Exception as e:
         print("❌ Heatmap generation failed:", e)
 
+# -------------------- BACKGROUND TASK --------------------
 @app.on_event("startup")
 async def schedule_refresh():
     async def refresh_loop():
         while True:
-            print("🔁 Background: Generating heatmap...")
+            print("🔁 Generating heatmap...")
             generate_heatmap()
-            print("✅ Heatmap refresh done.")
             await asyncio.sleep(3600)
     asyncio.create_task(refresh_loop())
 
 # -------------------- ROUTES --------------------
 @app.get("/")
 def root():
-    print("✅ '/' route hit")
     return {"message": "AQI backend running"}
 
 @app.get("/heatmap")
 def get_heatmap():
     if not os.path.exists(HEATMAP_FILE):
-        print("📁 No heatmap found, generating once...")
         generate_heatmap()
     return FileResponse(HEATMAP_FILE, media_type="text/html")
 
@@ -136,15 +134,11 @@ def get_aqi_json(city: str = Query(...)):
     lat, lon = coords
 
     try:
-        forecast_res = requests.get(
-            f"https://api.openweathermap.org/data/2.5/air_pollution/forecast?lat={lat}&lon={lon}&appid={API_KEY}"
-        )
-        current_res = requests.get(
-            f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={API_KEY}"
-        )
+        forecast_url = f"https://api.openweathermap.org/data/2.5/air_pollution/forecast?lat={lat}&lon={lon}&appid={API_KEY}"
+        current_url = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={API_KEY}"
 
-        forecast_data = forecast_res.json().get("list", [])
-        current_data = current_res.json().get("list", [])
+        forecast_data = requests.get(forecast_url).json().get("list", [])
+        current_data = requests.get(current_url).json().get("list", [])
 
         df_current = pd.DataFrame([{
             "datetime": datetime.utcfromtimestamp(i["dt"]).isoformat(),
@@ -195,26 +189,16 @@ def get_aqi_graph(city: str = Query(...)):
                 "aqi": item["main"]["aqi"]
             } for item in data]).assign(source=label)
 
-        hist_url = (
-            f"https://api.openweathermap.org/data/2.5/air_pollution/history"
-            f"?lat={lat}&lon={lon}&start={START}&end={END}&appid={API_KEY}"
-        )
-        fore_url = (
-            f"https://api.openweathermap.org/data/2.5/air_pollution/forecast"
-            f"?lat={lat}&lon={lon}&appid={API_KEY}"
-        )
+        hist_url = f"https://api.openweathermap.org/data/2.5/air_pollution/history?lat={lat}&lon={lon}&start={START}&end={END}&appid={API_KEY}"
+        fore_url = f"https://api.openweathermap.org/data/2.5/air_pollution/forecast?lat={lat}&lon={lon}&appid={API_KEY}"
 
-        hist_data = fetch_api_data(hist_url)
-        fore_data = fetch_api_data(fore_url)
-
-        df_hist = build_dataframe(hist_data, "Historical")
-        df_fore = build_dataframe(fore_data, "Forecast")
+        df_hist = build_dataframe(fetch_api_data(hist_url), "Historical")
+        df_fore = build_dataframe(fetch_api_data(fore_url), "Forecast")
         df_combined = pd.concat([df_hist, df_fore])
 
         if df_combined.empty:
             return JSONResponse(status_code=500, content={"error": "No AQI data to plot."})
 
-        # Plotting
         plt.figure(figsize=(14, 6))
         for label, group in df_combined.groupby("source"):
             plt.plot(group["datetime"], group["aqi"], marker="o", label=label)
@@ -246,4 +230,4 @@ def get_aqi_graph(city: str = Query(...)):
 # -------------------- LOCAL RUN --------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    uvicorn.run("main:app", host="0.0.0.0", port=10000)
